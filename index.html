@@ -47,6 +47,8 @@ addEventListener('resize',resize);resize();
 const SZ=()=>Math.min(W,H)*.085;
 
 /* ---------- camera ---------- */
+const iOS=/iP(hone|ad|od)/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+let camTried=false,wd=null;
 let mode='vis',camOK=false,lastT=-1,prevG=null;
 const tc=document.createElement('canvas');let tctx=null;
 const useGyro=()=>mode==='gyro'||!camOK;
@@ -196,16 +198,27 @@ function startRec(){
     if(e.error==='not-allowed'||e.error==='service-not-allowed'){stop();cap.textContent='Chưa được cấp quyền micro.'}
     else if(e.error==='network')cap.textContent='Lỗi mạng khi nhận giọng nói, đang thử lại…';
   };
-  rec.onend=()=>{if(running)setTimeout(startRec,300)};
+  rec.onend=()=>{if(running)setTimeout(startRec,iOS?700:300)};
   try{rec.start()}catch(_){}
 }
-function stop(){running=false;if(rec){rec.onend=null;try{rec.stop()}catch(_){}}go.classList.remove('on');go.textContent='🎤 Bắt đầu'}
+/* iPhone: camera và mic hay giành nhau, nên canh chừng và cứu hình khi bị đứng */
+function watch(){
+  clearInterval(wd);
+  wd=setInterval(()=>{
+    if(!running){clearInterval(wd);return}
+    const tr=stream&&stream.getVideoTracks()[0];
+    if(vid.paused)vid.play().catch(()=>{});
+    if(tr&&tr.readyState==='ended'){camOK=false;cap.textContent='iPhone đã tắt camera khi bật mic. Bấm 🔄 để bật lại camera.'}
+  },1500);
+}
+function stop(){running=false;clearInterval(wd);if(rec){rec.onend=null;try{rec.stop()}catch(_){}}go.classList.remove('on');go.textContent='🎤 Bắt đầu'}
 go.onclick=()=>{
   if(running){stop();cap.textContent='Đã dừng.';return}
   const p=window.DeviceOrientationEvent&&DeviceOrientationEvent.requestPermission?DeviceOrientationEvent.requestPermission().catch(()=>{}):null;
+  if(iOS&&!camOK&&!camTried){camTried=true;startCam();go.textContent='🎤 Nghe';cap.textContent='Camera đang bật. Khi thấy hình, bấm “🎤 Nghe”.';$('pan').classList.remove('show');return}
   loadLyrics();running=true;go.classList.add('on');go.textContent='⏹ Dừng';
   cap.textContent=lines.length?'Đang nghe… hát theo lời đã dán!':'Đang nghe… hãy hát hoặc nói!';
-  startRec();startCam();$('pan').classList.remove('show');
+  startRec();if(!iOS)startCam();if(iOS)watch();$('pan').classList.remove('show');
   try{navigator.wakeLock&&navigator.wakeLock.request('screen')}catch(_){}
 };
 $('lang').onchange=()=>{if(running){rec.onend=null;try{rec.stop()}catch(_){}startRec()}};
