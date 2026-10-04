@@ -31,6 +31,7 @@ input{touch-action:auto}
   <select id="lang"><option value="vi-VN">Tiếng Việt</option><option value="en-US">English</option><option value="ko-KR">한국어</option><option value="ja-JP">日本語</option><option value="zh-CN">中文</option></select>
   <label id="spl">↔<input id="sp" type="range" min="1" max="4" step=".5" value="2.5"></label>
   <button id="lyr">📝 Lời bài hát</button>
+  <button id="md">👁 Bám hình</button>
   <button id="flip">🔄</button>
   <button id="clr">🧹</button>
 </div>
@@ -46,6 +47,33 @@ addEventListener('resize',resize);resize();
 const SZ=()=>Math.min(W,H)*.085;
 
 /* ---------- camera ---------- */
+let mode='vis',camOK=false,lastT=-1,prevG=null;
+const tc=document.createElement('canvas');let tctx=null;
+const useGyro=()=>mode==='gyro'||!camOK;
+/* Bám hình: ước lượng chuyển động của khung hình camera rồi đẩy chữ theo, nên đi/xoay đến đâu chữ dính theo cảnh thật đến đó */
+function track(){
+  if(!camOK||vid.readyState<2||!vid.videoWidth||vid.currentTime===lastT)return;
+  lastT=vid.currentTime;
+  const vw=vid.videoWidth,vh=vid.videoHeight,TW=96,th=Math.round(TW*vh/vw);
+  if(tc.width!==TW||tc.height!==th){tc.width=TW;tc.height=th;tctx=tc.getContext('2d',{willReadFrequently:true});prevG=null}
+  tctx.drawImage(vid,0,0,TW,th);
+  const d=tctx.getImageData(0,0,TW,th).data,g=new Uint8Array(TW*th);
+  for(let i=0,j=0;j<g.length;i+=4,j++)g[j]=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
+  const p=prevG;prevG=g;if(!p)return;
+  const R=8,N=2*R+1,sad=new Float64Array(N*N);let best=1e18,bi=0,s0=0;
+  for(let sy=-R;sy<=R;sy++)for(let sx=-R;sx<=R;sx++){
+    let sum=0;
+    for(let y=R;y<th-R;y+=2){const a=y*TW,b=(y+sy)*TW+sx;for(let x=R;x<TW-R;x+=2)sum+=Math.abs(g[a+x]-p[b+x])}
+    const k=(sy+R)*N+sx+R;sad[k]=sum;if(!sx&&!sy)s0=sum;if(sum<best){best=sum;bi=k}
+  }
+  if(s0-best<s0*.05)return;
+  const bx=bi%N,by=(bi/N)|0;let ox=0,oy=0;
+  if(bx>0&&bx<N-1){const m=sad[bi-1],q=sad[bi+1],dd=m-2*best+q;if(dd>0)ox=.5*(m-q)/dd}
+  if(by>0&&by<N-1){const m=sad[bi-N],q=sad[bi+N],dd=m-2*best+q;if(dd>0)oy=.5*(m-q)/dd}
+  const fac=vw/TW*Math.max(W/vw,H/vh);
+  const dx=-(bx-R+ox)*fac*(facing==='user'?-1:1),dy=-(by-R+oy)*fac;
+  yaw+=dx/ppd;pitch+=dy/ppd;
+}
 async function startCam(){
   try{
     if(stream)stream.getTracks().forEach(t=>t.stop());
@@ -54,11 +82,12 @@ async function startCam(){
     try{stream=await navigator.mediaDevices.getUserMedia({video:hi,audio:false})}
     catch(_){stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing},audio:false})}
     vid.srcObject=stream;vid.classList.toggle('back',facing!=='user');
-    vid.play().catch(()=>{});
-  }catch(e){cap.textContent='Không mở được camera ('+e.name+'). Cần mở bằng HTTPS và cho phép camera. Vẫn dùng được với nền tối.'}
+    vid.play().catch(()=>{});camOK=true;prevG=null;
+  }catch(e){camOK=false;cap.textContent='Không mở được camera ('+e.name+'). Cần mở bằng HTTPS và cho phép camera. Vẫn dùng được với nền tối.'}
 }
 $('flip').onclick=()=>{facing=facing==='user'?'environment':'user';startCam()};
 $('clr').onclick=()=>{words=[];yaw0=null;yaw=0;pitch=0};
+$('md').onclick=()=>{mode=mode==='vis'?'gyro':'vis';$('md').textContent=mode==='vis'?'👁 Bám hình':'🧭 Cảm biến';words=[];yaw=0;pitch=0;yaw0=null;prevG=null};
 $('lyr').onclick=()=>$('pan').classList.toggle('show');
 
 /* ---------- hướng nhìn: gyro (điện thoại) hoặc kéo chuột (máy tính) ---------- */
@@ -66,12 +95,12 @@ addEventListener('deviceorientation',e=>{
   const a=e.webkitCompassHeading!=null?360-e.webkitCompassHeading:e.alpha;
   if(a==null||e.beta==null)return;
   gyro=true;if(yaw0===null)yaw0=a;
-  yaw=a-yaw0;pitch=Math.max(-60,Math.min(60,e.beta-90));
+  if(useGyro()){yaw=a-yaw0;pitch=Math.max(-60,Math.min(60,e.beta-90))}
 });
 let dn=null;
 cv.addEventListener('pointerdown',e=>{dn=e});
 addEventListener('pointerup',()=>{dn=null});
-addEventListener('pointermove',e=>{if(!dn||gyro)return;yaw+=(e.clientX-dn.clientX)/ppd;pitch+=(e.clientY-dn.clientY)/ppd;dn=e});
+addEventListener('pointermove',e=>{if(!dn||(gyro&&useGyro()))return;yaw+=(e.clientX-dn.clientX)/ppd;pitch+=(e.clientY-dn.clientY)/ppd;dn=e});
 
 /* ---------- bố cục chữ trong không gian ---------- */
 const newLine=()=>{hue=(hue+47)%360};
@@ -183,6 +212,7 @@ $('lang').onchange=()=>{if(running){rec.onend=null;try{rec.stop()}catch(_){}star
 
 /* ---------- vẽ ---------- */
 function frame(now){
+  if(!useGyro())track();
   ctx.clearRect(0,0,W,H);
   words=words.filter(w=>(now-w.t)/1000<w.life);
   for(const w of words){
